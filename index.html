@@ -438,8 +438,8 @@
             ⬇ Download Excel Report
           </button>
           <label style="background:var(--surface);color:var(--text-dim);border:1px solid var(--border);border-radius:var(--radius);padding:12px 24px;font-family:var(--font-head);font-size:14px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:all .15s;display:inline-block" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background='var(--surface)'">
-            ⬆ Upload JSON Data
-            <input type="file" accept=".json" style="display:none" onchange="App.Data.Import.handleUpload(event)">
+            ⬆ Upload Excel Data
+            <input type="file" accept=".xlsx,.xls" style="display:none" onchange="App.Data.Import.handleUpload(event)">
           </label>
         </div>
       </div>
@@ -592,34 +592,181 @@ App.Data.Store = {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Layer 2 — Data: Import
+// Reads the exported "All Bookings" Excel sheet and imports into D1.
+// Expected sheet: "All Bookings"
+// Expected columns (row 4 = headers, row 5+ = data):
+//   Room | Occupant | Company | Role | Check In | Check Out | Roster | Clean | Repair Needed | Notes
 // ─────────────────────────────────────────────────────────────────────────────
 App.Data.Import = {
+
+  // Parse an Excel date serial or string into YYYY-MM-DD
+  _parseDate(val) {
+    if (!val) return '';
+    // Already a string like "2026-04-14" or "14/04/2026"
+    if (typeof val === 'string') {
+      // ISO format
+      if (/^\d{4}-\d{2}-\d{2}$/.test(val.trim())) return val.trim();
+      // AU format DD/MM/YYYY
+      const au = val.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (au) return `${au[3]}-${au[2].padStart(2,'0')}-${au[1].padStart(2,'0')}`;
+      // Try native parse as fallback
+      const d = new Date(val);
+      if (!isNaN(d)) return App.Service.Dates.fmt(d);
+      return '';
+    }
+    // Excel serial number (days since 1900-01-01, with Lotus 1900 leap bug)
+    if (typeof val === 'number') {
+      const d = new Date(Math.round((val - 25569) * 86400 * 1000));
+      return App.Service.Dates.fmt(d);
+    }
+    return '';
+  },
+
+  // Convert a row array + header map into a booking object
+  _rowToBooking(row, colIdx, rooms) {
+    const get = (name) => {
+      const i = colIdx[name];
+      return i !== undefined ? (row[i] ?? '') : '';
+    };
+
+    const roomNum = String(get('Room')).trim().toUpperCase();
+    const room = rooms.find(r => r.num.toUpperCase() === roomNum);
+    if (!room) throw new Error(`Unknown room: "${roomNum}"`);
+
+    const checkin  = this._parseDate(get('Check In'));
+    const checkout = this._parseDate(get('Check Out'));
+    if (!checkin)  throw new Error(`Invalid check-in date for row with occupant "${get('Occupant')}"`);
+    if (!checkout) throw new Error(`Invalid check-out date for row with occupant "${get('Occupant')}"`);
+
+    const rosterPattern = String(get('Roster')).trim();
+    let segments = [];
+    if (rosterPattern) {
+      const match = rosterPattern.match(/^(\d+)\/(\d+)$/);
+      if (match) {
+        const [, on, off] = match.map(Number);
+        // Calculate rotations from date span
+        const spanDays = Math.round((App.Service.Dates.parse(checkout) - App.Service.Dates.parse(checkin)) / 86400000) + 1;
+        const rotations = Math.max(1, Math.round(spanDays / (on + off)));
+        segments = App.Service.Roster.buildSegments(App.Service.Dates.parse(checkin), on, off, rotations);
+      }
+    }
+
+    const cleanVal = String(get('Clean')).trim().toLowerCase();
+    const repairVal = String(get('Repair Needed')).trim().toLowerCase();
+
+    return {
+      id: String(Date.now()) + Math.random().toString(36).slice(2,6),
+      roomId:        room.id,
+      name:          String(get('Occupant')).trim(),
+      company:       String(get('Company')).trim(),
+      role:          String(get('Role')).trim(),
+      checkin,
+      checkout,
+      clean:         cleanVal === 'yes' || cleanVal === '1' || cleanVal === 'true',
+      repair:        repairVal === 'yes' || repairVal === '1' || repairVal === 'true',
+      notes:         String(get('Notes')).trim(),
+      color:         (App.Data.Store.bookings.length) % 6,
+      rosterPattern,
+      offweek:       'held',
+      segments,
+    };
+  },
+
   handleUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
+
+    if (typeof XLSX === 'undefined') {
+      App.UI.showToast('Excel library not loaded yet, please wait', true);
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = async (e) => {
+      App.UI.showLoading('Reading Excel file...');
       try {
-        const payload = JSON.parse(e.target.result);
-        // Accept either { bookings, rooms } or legacy flat array of bookings
-        const normalized = Array.isArray(payload)
-          ? { bookings: payload, rooms: [] }
-          : payload;
-        App.UI.showLoading('Importing data...');
-        const result = await App.Data.API.importData(normalized);
+        // Parse workbook
+        const wb = XLSX.read(e.target.result, { type: 'array', cellDates: false });
+
+        // Find the "All Bookings" sheet
+        const sheetName = wb.SheetNames.find(n => n.trim().toLowerCase() === 'all bookings');
+        if (!sheetName) throw new Error('Sheet "All Bookings" not found in the uploaded file');
+
+        const ws = wb.Sheets[sheetName];
+        // Convert to array of arrays (raw values)
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
+
+        // Find the header row (contains "Room" and "Occupant")
+        let headerRowIdx = -1;
+        for (let i = 0; i < Math.min(rows.length, 10); i++) {
+          const row = rows[i].map(c => String(c).trim().toLowerCase());
+          if (row.includes('room') && row.includes('occupant')) {
+            headerRowIdx = i;
+            break;
+          }
+        }
+        if (headerRowIdx === -1) throw new Error('Could not find header row with "Room" and "Occupant" columns');
+
+        // Build column index map
+        const headers = rows[headerRowIdx].map(c => String(c).trim());
+        const colIdx = {};
+        headers.forEach((h, i) => { colIdx[h] = i; });
+
+        // Validate required columns
+        const required = ['Room','Occupant','Check In','Check Out'];
+        const missing = required.filter(h => colIdx[h] === undefined);
+        if (missing.length) throw new Error(`Missing required columns: ${missing.join(', ')}`);
+
+        // Parse data rows (skip header and any blank rows)
+        const rooms = App.Data.Store.rooms;
+        const bookings = [];
+        const errors = [];
+
+        for (let i = headerRowIdx + 1; i < rows.length; i++) {
+          const row = rows[i];
+          // Skip blank rows
+          if (!row || row.every(c => c === '' || c === null || c === undefined)) continue;
+          // Skip if Room cell is empty
+          if (!row[colIdx['Room']]) continue;
+          try {
+            bookings.push(this._rowToBooking(row, colIdx, rooms));
+          } catch (err) {
+            errors.push(`Row ${i + 1}: ${err.message}`);
+          }
+        }
+
+        if (bookings.length === 0) {
+          throw new Error('No valid bookings found in the file' + (errors.length ? `\n${errors.join('\n')}` : ''));
+        }
+
+        // Show warning if some rows had errors but continue with valid ones
+        if (errors.length) {
+          console.warn('Import row errors:', errors);
+        }
+
+        // Send to D1 via API
+        App.UI.showLoading(`Importing ${bookings.length} bookings...`);
+        const result = await App.Data.API.importData({ bookings, rooms: [] });
+
+        // Reload store from D1
         await App.Data.Store.load();
         App.UI.Calendar.render();
         App.UI.updateStats();
         App.UI.BookingForm.renderList();
-        App.UI.showToast(`Imported ${result.bookingsImported} bookings ✔`);
+
+        const warnMsg = errors.length ? ` (${errors.length} rows skipped)` : '';
+        App.UI.showToast(`Imported ${result.bookingsImported} bookings ✔${warnMsg}`);
+
       } catch (err) {
         App.UI.showToast('Import failed: ' + err.message, true);
+        console.error('Excel import error:', err);
       } finally {
         App.UI.hideLoading();
         event.target.value = '';
       }
     };
-    reader.readAsText(file);
+
+    reader.readAsArrayBuffer(file);
   },
 };
 
