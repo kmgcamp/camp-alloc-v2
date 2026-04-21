@@ -491,35 +491,128 @@ App.Config = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Layer 2 — Data: API (talks to Cloudflare Worker / D1)
+// Layer 2 — Data: API
+// Adapts to the existing Cloudflare Worker file-based protocol:
+//   GET  /data/bookings.json  → { content: [...], sha }
+//   PUT  /data/bookings.json  → { content: [...] }
+//   GET  /data/rooms.json     → { content: [...], sha }
+//   PUT  /data/rooms.json     → { content: [...] }
+//
+// NOTE: When the new D1 worker is deployed, swap App.Config.USE_D1 to true
+// and all calls will automatically switch to the /api/* REST routes.
 // ─────────────────────────────────────────────────────────────────────────────
 App.Data = {};
 App.Data.API = {
-  _headers() {
+  _h() {
     return { 'X-App-Password': App.Config.APP_PASSWORD, 'Content-Type': 'application/json' };
   },
-  async _get(path) {
-    const r = await fetch(App.Config.WORKER_URL + path, { headers: this._headers() });
-    if (!r.ok) throw new Error('API error ' + r.status);
-    return r.json();
+
+  // ── Low-level file helpers (existing worker protocol) ──────────────────────
+  async _fileGet(path) {
+    const r = await fetch(App.Config.WORKER_URL + path, { headers: this._h() });
+    if (!r.ok) throw new Error('Fetch error ' + r.status);
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    if (data.exists === false) return null;
+    return data; // { content, sha }
   },
-  async _send(method, path, body) {
+  async _filePut(path, content) {
+    App.UI.setSaveState('saving');
     const r = await fetch(App.Config.WORKER_URL + path, {
-      method, headers: this._headers(), body: body ? JSON.stringify(body) : undefined,
+      method: 'PUT',
+      headers: this._h(),
+      body: JSON.stringify({ content }),
     });
-    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || 'API error ' + r.status); }
-    return r.json();
+    if (!r.ok) {
+      App.UI.setSaveState('error');
+      const e = await r.json().catch(() => ({}));
+      throw new Error(e.error || 'Save failed ' + r.status);
+    }
+    App.UI.setSaveState('synced');
   },
 
-  getRooms:    ()      => App.Data.API._get('/api/rooms'),
-  getBookings: ()      => App.Data.API._get('/api/bookings'),
-  updateRoom:  (r)     => App.Data.API._send('PUT', `/api/rooms/${r.id}`, { clean: r.clean, repair: r.repair }),
-  createBooking: (b)   => App.Data.API._send('POST', '/api/bookings', b),
-  updateBooking: (b)   => App.Data.API._send('PUT', `/api/bookings/${encodeURIComponent(b.id)}`, b),
-  deleteBooking: (id)  => App.Data.API._send('DELETE', `/api/bookings/${encodeURIComponent(id)}`),
-  getCheckins:  (date) => App.Data.API._get(`/api/checkins?date=${date}`),
-  getCheckouts: (date) => App.Data.API._get(`/api/checkouts?date=${date}`),
-  importData:   (payload) => App.Data.API._send('POST', '/api/import', payload),
+  // ── Public API methods (used by Store + Service layers) ───────────────────
+
+  async getRooms() {
+    const res = await this._fileGet('/data/rooms.json');
+    if (!res) return []; // not yet initialised
+    return res.content;
+  },
+
+  async getBookings() {
+    const res = await this._fileGet('/data/bookings.json');
+    if (!res) return [];
+    return res.content;
+  },
+
+  async saveBookings(bookings) {
+    return this._filePut('/data/bookings.json', bookings);
+  },
+
+  async saveRooms(rooms) {
+    return this._filePut('/data/rooms.json', rooms.map(r => ({ id: r.id, num: r.num, clean: r.clean, repair: r.repair })));
+  },
+
+  // Individual ops — all update the full in-memory store then flush to worker
+  async updateRoom(room) {
+    const r = App.Data.Store.rooms.find(x => x.id === room.id);
+    if (r) { r.clean = room.clean; r.repair = room.repair; }
+    return this.saveRooms(App.Data.Store.rooms);
+  },
+
+  async createBooking(b) {
+    App.Data.Store.bookings.push(b);
+    return this.saveBookings(App.Data.Store.bookings);
+  },
+
+  async updateBooking(b) {
+    const idx = App.Data.Store.bookings.findIndex(x => x.id === b.id);
+    if (idx !== -1) App.Data.Store.bookings[idx] = b;
+    return this.saveBookings(App.Data.Store.bookings);
+  },
+
+  async deleteBooking(id) {
+    App.Data.Store.bookings = App.Data.Store.bookings.filter(x => x.id !== id);
+    return this.saveBookings(App.Data.Store.bookings);
+  },
+
+  // Check-in/out filtered locally from in-memory store (no extra endpoint needed)
+  getCheckins(date) {
+    const bookings = App.Data.Store.bookings;
+    const results = bookings.filter(b =>
+      b.checkin === date ||
+      (b.segments && b.segments.some(s => s.checkin === date && s.isOn))
+    );
+    return Promise.resolve(results);
+  },
+
+  getCheckouts(date) {
+    const bookings = App.Data.Store.bookings;
+    const results = bookings.filter(b =>
+      b.checkout === date ||
+      (b.segments && b.segments.some(s => s.checkout === date))
+    );
+    return Promise.resolve(results);
+  },
+
+  // Bulk import: merge into store and flush both files
+  async importData(payload) {
+    const { bookings: bArr = [], rooms: rArr = [] } = payload;
+    // Upsert rooms
+    rArr.forEach(r => {
+      const local = App.Data.Store.rooms.find(x => x.id === r.id);
+      if (local) { local.clean = r.clean; local.repair = r.repair; }
+    });
+    // Upsert bookings
+    bArr.forEach(b => {
+      const idx = App.Data.Store.bookings.findIndex(x => x.id === b.id);
+      if (idx !== -1) App.Data.Store.bookings[idx] = b;
+      else App.Data.Store.bookings.push(b);
+    });
+    await this.saveBookings(App.Data.Store.bookings);
+    await this.saveRooms(App.Data.Store.rooms);
+    return { bookingsImported: bArr.length, roomsImported: rArr.length };
+  },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -545,8 +638,16 @@ App.Data.Store = {
       App.Data.API.getRooms(),
       App.Data.API.getBookings(),
     ]);
-    this.applyRooms(apiRooms);
-    this.bookings = apiBookings;
+    if (!apiRooms || apiRooms.length === 0) {
+      await App.Data.API.saveRooms(this.rooms);
+    } else {
+      this.applyRooms(apiRooms);
+    }
+    if (apiBookings && apiBookings.length > 0) {
+      this.bookings = apiBookings;
+    } else if (!apiBookings) {
+      await App.Data.API.saveBookings([]);
+    }
   },
 };
 
@@ -1073,8 +1174,7 @@ App.UI.BookingPopup = {
     App.UI.showLoading('Deleting...');
     try {
       App.UI.setSaveState('saving');
-      await App.Data.API.deleteBooking(id);
-      App.Data.Store.bookings=App.Data.Store.bookings.filter(x=>x.id!==id);
+      await App.Data.API.deleteBooking(id); // mutates store and saves
       App.UI.setSaveState('synced');
       App.UI.Popup.close(); App.UI.Calendar.render(); App.UI.updateStats(); App.UI.BookingForm.renderList();
       App.UI.showToast('Booking deleted');
@@ -1222,12 +1322,11 @@ App.UI.BookingForm = {
     App.UI.showLoading('Saving booking...');
     try {
       App.UI.setSaveState('saving');
-      await App.Data.API.createBooking(nb);
-      // also update room condition
+      // createBooking pushes nb into store and flushes; update room then flush rooms too
       const room=App.Data.Store.rooms.find(r=>r.id===this.selectedRoom);
       room.clean=this.isClean; room.repair=this.needsRepair;
-      await App.Data.API.updateRoom(room);
-      App.Data.Store.bookings.push(nb);
+      await App.Data.API.createBooking(nb);   // adds nb to store + saves bookings
+      await App.Data.API.saveRooms(App.Data.Store.rooms); // flush updated room status
       App.UI.setSaveState('synced');
       App.UI.showToast('Booking saved ✔');
       this.resetForm(); App.UI.Calendar.render(); App.UI.updateStats(); this.renderList();
