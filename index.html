@@ -496,11 +496,10 @@ const App = {};
 // Layer 1 — Config
 // ─────────────────────────────────────────────────────────────────────────────
 App.Config = {
-  WORKER_URL:   'https://campbook2.alvinkc.workers.dev',
-  APP_PASSWORD: 'kmetgroup123!',
-  SESSION_MINS: 480,
-  LS_AUTH:      'campalloc_auth_v8',
-  TOTAL_ROOMS:  80,
+  WORKER_URL:  'https://campbook2.alvinkc.workers.dev',
+  SESSION_MS:  8 * 60 * 60 * 1000,   // 8 hours — must match worker
+  LS_TOKEN:    'campalloc_token_v1',   // localStorage key for session token
+  TOTAL_ROOMS: 80,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -519,7 +518,10 @@ App.Config = {
 App.Data = {};
 App.Data.API = {
   _h() {
-    return { 'X-App-Password': App.Config.APP_PASSWORD, 'Content-Type': 'application/json' };
+    return {
+      'X-Session-Token': App.Auth.getToken(),
+      'Content-Type': 'application/json',
+    };
   },
 
   async _get(path) {
@@ -1558,32 +1560,70 @@ App.UI.Reports = {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Layer 5 — Auth
+// Password is sent once to POST /api/auth — worker validates and returns a
+// signed HMAC token. All subsequent requests carry only the token.
+// The password is NEVER stored in this file or in localStorage.
 // ─────────────────────────────────────────────────────────────────────────────
 App.Auth = {
-  isAuthenticated() {
-    try { const a=JSON.parse(localStorage.getItem(App.Config.LS_AUTH)); return a&&Date.now()<a.expires; } catch { return false; }
+  getToken() {
+    return localStorage.getItem(App.Config.LS_TOKEN) || '';
   },
-  setAuthenticated() { localStorage.setItem(App.Config.LS_AUTH,JSON.stringify({expires:Date.now()+App.Config.SESSION_MINS*60*1000})); },
-  clearAuth() { localStorage.removeItem(App.Config.LS_AUTH); },
 
-  doLogin() {
-    const pass=document.getElementById('loginPassword').value;
-    if (pass!==App.Config.APP_PASSWORD) {
-      const card=document.querySelector('.login-card');
+  isAuthenticated() {
+    try {
+      const stored = localStorage.getItem(App.Config.LS_TOKEN + '_exp');
+      if (!stored) return false;
+      return Date.now() < +stored;
+    } catch { return false; }
+  },
+
+  _saveToken(token) {
+    localStorage.setItem(App.Config.LS_TOKEN, token);
+    localStorage.setItem(App.Config.LS_TOKEN + '_exp', Date.now() + App.Config.SESSION_MS);
+  },
+
+  clearAuth() {
+    localStorage.removeItem(App.Config.LS_TOKEN);
+    localStorage.removeItem(App.Config.LS_TOKEN + '_exp');
+  },
+
+  async doLogin() {
+    const pass = document.getElementById('loginPassword').value;
+    const btn  = document.querySelector('.login-btn');
+    btn.textContent = 'Verifying...'; btn.disabled = true;
+
+    try {
+      const r = await fetch(`${App.Config.WORKER_URL}/api/auth`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pass }),
+      });
+
+      if (!r.ok) {
+        throw new Error('wrong');
+      }
+
+      const { token } = await r.json();
+      this._saveToken(token);
+      document.getElementById('loginPassword').value = '';
+      document.getElementById('loginError').textContent = '';
+      await App.bootstrap();
+
+    } catch {
+      const card = document.querySelector('.login-card');
       card.classList.remove('login-shake'); void card.offsetWidth; card.classList.add('login-shake');
-      document.getElementById('loginError').textContent='Incorrect password. Try again.';
-      document.getElementById('loginPassword').value=''; return;
+      document.getElementById('loginError').textContent = 'Incorrect password. Try again.';
+      document.getElementById('loginPassword').value = '';
+    } finally {
+      btn.textContent = 'Enter'; btn.disabled = false;
     }
-    document.getElementById('loginError').textContent='';
-    this.setAuthenticated();
-    App.bootstrap();
   },
 
   doLogout() {
     this.clearAuth();
-    document.getElementById('mainApp').style.display='none';
-    document.getElementById('loginScreen').style.display='flex';
-    setTimeout(()=>document.getElementById('loginPassword').focus(),100);
+    document.getElementById('mainApp').style.display = 'none';
+    document.getElementById('loginScreen').style.display = 'flex';
+    setTimeout(() => document.getElementById('loginPassword').focus(), 100);
   },
 };
 
