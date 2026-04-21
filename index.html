@@ -1,7 +1,11 @@
 <!DOCTYPE html>
+<!-- CampAlloc v2.3 excel-import build -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Camp Allocation — Wyndham Airport Camp</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -437,10 +441,19 @@
           <button onclick="App.UI.Reports.generateExcel()" style="background:var(--accent);color:#000;border:none;border-radius:var(--radius);padding:12px 24px;font-family:var(--font-head);font-size:14px;font-weight:900;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:all .15s" onmouseover="this.style.background='#ffc233'" onmouseout="this.style.background='var(--accent)'">
             ⬇ Download Excel Report
           </button>
-          <label style="background:var(--surface);color:var(--text-dim);border:1px solid var(--border);border-radius:var(--radius);padding:12px 24px;font-family:var(--font-head);font-size:14px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:all .15s;display:inline-block" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background='var(--surface)'">
+          <button
+            onclick="document.getElementById('excelUploadInput').click()"
+            style="background:var(--surface);color:var(--text-dim);border:1px solid var(--border);border-radius:var(--radius);padding:12px 24px;font-family:var(--font-head);font-size:14px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:all .15s"
+            onmouseover="this.style.background='var(--surface2)';this.style.borderColor='var(--accent)';this.style.color='var(--accent)'"
+            onmouseout="this.style.background='var(--surface)';this.style.borderColor='var(--border)';this.style.color='var(--text-dim)'">
             ⬆ Upload Excel Data
-            <input type="file" accept=".xlsx,.xls" style="display:none" onchange="App.Data.Import.handleUpload(event)">
-          </label>
+          </button>
+          <input
+            id="excelUploadInput"
+            type="file"
+            accept=".xlsx,.xls"
+            style="display:none"
+            onchange="App.Data.Import.handleUpload(event)">
         </div>
       </div>
 
