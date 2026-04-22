@@ -813,7 +813,7 @@ App.Service.Dates = {
   },
   today() { const d = new Date(); d.setHours(0, 0, 0, 0); return d; },
   todayStr() { return this.fmt(this.today()); },
-  overlap(s1, e1, s2, e2) { return this.parse(s1) <= this.parse(e2) && this.parse(e1) >= this.parse(s2); },
+  overlap(s1, e1, s2, e2) { return this.parse(s1) < this.parse(e2) && this.parse(e1) > this.parse(s2); }, // checkout exclusive
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -827,12 +827,12 @@ App.Service.Booking = {
         if (!s.isOn && b.offweek === 'free') return false;
         const cin = App.Service.Dates.parse(s.checkin), cout = App.Service.Dates.parse(s.checkout);
         cin.setHours(0,0,0,0); cout.setHours(0,0,0,0);
-        return d >= cin && d <= cout;
+        return d >= cin && d < cout;  // checkout day is free (exclusive)
       });
     }
     const cin = App.Service.Dates.parse(b.checkin), cout = App.Service.Dates.parse(b.checkout);
     cin.setHours(0,0,0,0); cout.setHours(0,0,0,0);
-    return d >= cin && d <= cout;
+    return d >= cin && d < cout;  // checkout day is free (exclusive)
   },
 
   spansDate(b, date) {
@@ -858,7 +858,7 @@ App.Service.Booking = {
       if (x.id === excludeId || x.roomId !== roomId) return false;
       if (!App.Service.Dates.overlap(checkin, checkout, x.checkin, x.checkout)) return false;
       const dur = Math.round((App.Service.Dates.parse(checkout) - App.Service.Dates.parse(checkin)) / 86400000);
-      for (let i = 0; i <= dur; i++) {
+      for (let i = 0; i < dur; i++) {  // checkout day is free (exclusive)
         const dt = new Date(App.Service.Dates.parse(checkin)); dt.setDate(dt.getDate() + i);
         let newOcc = true;
         if (segments && segments.length) {
@@ -1358,8 +1358,8 @@ App.UI.BookingForm = {
       const isRepair=room.repair;
       const conflict=cin&&cout&&App.Data.Store.bookings.some(b=>{
         if (b.roomId!==room.id||!App.Service.Dates.overlap(cin,cout,b.checkin,b.checkout)) return false;
-        for (let dt=new Date(App.Service.Dates.parse(cin));dt<=App.Service.Dates.parse(cout);dt.setDate(dt.getDate()+1)) {
-          if (App.Service.Booking.occupiesOnDate(b,new Date(dt))) return true;
+        for (let dt=new Date(App.Service.Dates.parse(cin));dt<App.Service.Dates.parse(cout);dt.setDate(dt.getDate()+1)) {
+          if (App.Service.Booking.occupiesOnDate(b,new Date(dt))) return true;  // checkout exclusive
         }
         return false;
       });
