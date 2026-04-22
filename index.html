@@ -129,6 +129,13 @@
   .booking-bar.off-week{opacity:.35;background:repeating-linear-gradient(45deg,rgba(255,255,255,.04) 0px,rgba(255,255,255,.04) 4px,transparent 4px,transparent 8px)!important;border-left-color:var(--text-muted)!important;color:var(--text-muted)!important;cursor:default;}
   .bar-start{border-radius:4px 0 0 4px;left:2px;}.bar-end{border-radius:0 4px 4px 0;right:2px;}.bar-mid{border-radius:0;left:0;right:0;}.bar-solo{left:2px;right:2px;}
 
+  /* ── Split cell: checkout top half + checkin bottom half ── */
+  .booking-bar.bar-top{top:2px;height:20px;border-radius:4px 0 0 4px;left:2px;right:1px;font-size:10px;padding:0 4px;box-shadow:0 1px 4px rgba(0,0,0,.4);}
+  .booking-bar.bar-top.bar-solo-top{border-radius:4px;left:2px;right:2px;}
+  .booking-bar.bar-bot{top:24px;height:20px;border-radius:0 4px 4px 0;left:1px;right:2px;font-size:10px;padding:0 4px;box-shadow:0 1px 4px rgba(0,0,0,.4);}
+  .booking-bar.bar-bot.bar-solo-bot{border-radius:4px;left:2px;right:2px;}
+  .split-divider{position:absolute;top:22px;left:2px;right:2px;height:1px;background:var(--border);z-index:3;pointer-events:none;}
+
   /* ══ POPUP ══ */
   .popup-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;backdrop-filter:blur(4px);}
   .popup-overlay.open{display:flex;align-items:center;justify-content:center;}
@@ -1086,22 +1093,59 @@ App.UI.Calendar = {
       for (let d=0;d<days;d++) {
         const dt=new Date(startDate); dt.setDate(startDate.getDate()+d);
         const dtStr=App.Service.Dates.fmt(dt), isToday=dt.getTime()===today.getTime(), isWknd=dt.getDay()===0||dt.getDay()===6;
-        const dayBks=roomBks.filter(b=>App.Service.Booking.spansDate(b,dt));
-        let bars='';
-        dayBks.forEach(b=>{
+
+        // Separate bookings into: those checking OUT today vs those spanning (not checkout day)
+        const checkoutBks = roomBks.filter(b => App.Service.Dates.fmt(App.Service.Dates.parse(b.checkout)) === dtStr);
+        const checkinBks  = roomBks.filter(b => App.Service.Dates.fmt(App.Service.Dates.parse(b.checkin))  === dtStr);
+        const midBks      = roomBks.filter(b => App.Service.Booking.spansDate(b,dt)
+                              && App.Service.Dates.fmt(App.Service.Dates.parse(b.checkout)) !== dtStr
+                              && App.Service.Dates.fmt(App.Service.Dates.parse(b.checkin))  !== dtStr);
+
+        // isSplit: someone checks out AND someone else checks in on same day
+        const isSplit = checkoutBks.length > 0 && checkinBks.length > 0;
+
+        const makeBar = (b, halfMode) => {
           const seg=App.Service.Booking.segmentOnDate(b,dtStr);
           const isOff=seg&&!seg.isOn, isFreeOff=isOff&&b.offweek==='free';
           const cin=App.Service.Dates.parse(b.checkin), cout=App.Service.Dates.parse(b.checkout);
           const isStart=App.Service.Dates.fmt(cin)===dtStr, isEnd=App.Service.Dates.fmt(cout)===dtStr;
-          const posClass=isStart&&isEnd?'bar-solo':isStart?'bar-start':isEnd?'bar-end':'bar-mid';
-          const showName=isStart||d===0;
-          const label=isFreeOff?'(off)':showName?b.name.split(' ')[0]:'';
-          bars+=`<div class="booking-bar color-${(b.color||0)%6} ${posClass}${isOff?' off-week':''}"
-            ${!isOff?`draggable="true" ondragstart="App.UI.Calendar.onDragStart(event,'${b.id}')"`:''}
+
+          let posClass, label;
+          if (halfMode === 'top') {
+            // Outgoing — always the end of a bar
+            const soloTop = isStart; // solo if also starts here (1-day booking on checkout day of another)
+            posClass = soloTop ? 'bar-top bar-solo-top' : 'bar-top';
+            label = isFreeOff ? '(off)' : b.name.split(' ')[0];
+          } else if (halfMode === 'bot') {
+            // Incoming — always the start of a bar
+            const soloBot = isEnd; // solo if also ends here (same-day booking)
+            posClass = soloBot ? 'bar-bot bar-solo-bot' : 'bar-bot';
+            label = isFreeOff ? '(off)' : b.name.split(' ')[0];
+          } else {
+            // Normal full-height bar
+            posClass = isStart&&isEnd?'bar-solo':isStart?'bar-start':isEnd?'bar-end':'bar-mid';
+            label = isFreeOff?'(off)':(isStart||d===0)?b.name.split(' ')[0]:'';
+          }
+
+          return `<div class="booking-bar color-${(b.color||0)%6} ${posClass}${isOff?' off-week':''}"
+            ${!isOff&&halfMode!=='top'?`draggable="true" ondragstart="App.UI.Calendar.onDragStart(event,'${b.id}')"`:''}
             onclick="App.UI.BookingPopup.show('${b.id}',event)"
             title="${(b.name||'').replace(/"/g,'&quot;')}${b.rosterPattern?' ['+b.rosterPattern+']':''} | ${b.checkin} → ${b.checkout}${isOff?' | OFF WEEK':''}">
             ${label}</div>`;
-        });
+        };
+
+        let bars = '';
+        if (isSplit) {
+          // Split cell: top half = outgoing (checkout), bottom half = incoming (checkin)
+          bars += '<div class="split-divider"></div>';
+          checkoutBks.forEach(b => { bars += makeBar(b, 'top'); });
+          checkinBks.forEach(b  => { bars += makeBar(b, 'bot'); });
+        } else {
+          // Normal cell: all spanning bookings + any checkout-only or checkin-only
+          const allBks = [...new Map([...checkoutBks,...checkinBks,...midBks].map(b=>[b.id,b])).values()];
+          allBks.forEach(b => { bars += makeBar(b, null); });
+        }
+
         html+=`<div class="cal-day-cell${isToday?' today-col':''}${isWknd?' weekend':''}"
           ondragover="App.UI.Calendar.onDragOver(event)" ondragleave="App.UI.Calendar.onDragLeave(event)"
           ondrop="App.UI.Calendar.onDrop(event,'${room.id}','${dtStr}')">${bars}</div>`;
