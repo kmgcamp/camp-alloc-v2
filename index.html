@@ -637,12 +637,48 @@ App.Data.Store = {
 
   async load() {
     const siteId = App.Site.id();
-    const [apiRooms, apiBookings] = await Promise.all([
-      App.Data.API.getRooms(siteId),
-      App.Data.API.getBookings(siteId),
-    ]);
-    if (apiRooms)    this.rooms    = apiRooms;
-    if (apiBookings) this.bookings = apiBookings;
+    const site   = App.Site.get();
+
+    try {
+      const [apiRooms, apiBookings] = await Promise.all([
+        App.Data.API.getRooms(siteId),
+        App.Data.API.getBookings(siteId),
+      ]);
+
+      // Worker may return array directly OR { rooms: [...] } — handle both
+      const roomsArr = Array.isArray(apiRooms) ? apiRooms
+        : (apiRooms && Array.isArray(apiRooms.rooms)) ? apiRooms.rooms : null;
+      const bksArr   = Array.isArray(apiBookings) ? apiBookings
+        : (apiBookings && Array.isArray(apiBookings.bookings)) ? apiBookings.bookings : null;
+
+      if (roomsArr && roomsArr.length > 0) {
+        this.rooms = roomsArr;
+      } else {
+        // API returned empty or wrong shape — seed rooms from config so calendar shows
+        this.rooms = App.Data.Store._seedRoomsFromConfig(site);
+      }
+      if (bksArr) this.bookings = bksArr;
+
+    } catch (e) {
+      console.warn('Store.load error:', e.message);
+      // Seed rooms from config so calendar is never blank
+      if (this.rooms.length === 0) {
+        this.rooms = App.Data.Store._seedRoomsFromConfig(site);
+      }
+    }
+  },
+
+  // Generate placeholder rooms from site config when API is unavailable
+  _seedRoomsFromConfig(site) {
+    const prefix = site.prefix || 'R';
+    return Array.from({ length: site.roomCount }, (_, i) => ({
+      id:     1000 + i,   // temp IDs won't clash with real ones
+      num:    `${prefix}${String(i + 1).padStart(2, '0')}`,
+      clean:  true,
+      repair: false,
+      siteId: site.id,
+      _placeholder: true,
+    }));
   },
 };
 
@@ -1134,6 +1170,10 @@ App.UI.Calendar = {
       html+=`<div class="cal-day-header${isToday?' today-col':''}" style="${isWknd?'color:var(--text-muted);':''}"><span class="cal-day-num">${dt.getDate()}</span><span class="cal-day-name">${DN[dt.getDay()]}</span></div>`;
     }
     html+='</div>';
+    if (App.Data.Store.rooms.length === 0) {
+      grid.innerHTML = '<div class="empty-state" style="padding:60px"><div class="icon">🔌</div>Could not load rooms — check worker is deployed and D1 binding is set.</div>';
+      return;
+    }
     App.Data.Store.rooms.forEach(room => {
       html+=`<div class="cal-room-row" style="grid-template-columns:${cols}">`;
       const bdg=`${room.clean?'<span class="badge clean">Clean</span>':'<span class="badge dirty">Dirty</span>'}${room.repair?'<span class="badge repair">Repair</span>':''}`;
