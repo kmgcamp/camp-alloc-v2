@@ -1,13 +1,5 @@
 // workers/worker.js
-// ─────────────────────────────────────────────────────────────────────────────
-// Camp Allocation — Cloudflare Worker (D1 backend)
-// Auth: HMAC-signed session tokens (password never sent after login)
-//
-// Env secrets required (Cloudflare dashboard → Worker → Settings → Variables):
-//   APP_PASSWORD  — the login password
-//   TOKEN_SECRET  — random secret for signing tokens (min 32 chars)
-//                   generate: crypto.randomUUID()+crypto.randomUUID() in console
-// ─────────────────────────────────────────────────────────────────────────────
+// Camp Allocation — Cloudflare Worker (D1 backend) — multi-site support
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -22,7 +14,7 @@ function json(data, status = 200) {
 }
 function err(msg, status = 400) { return json({ error: msg }, status); }
 
-// ── HMAC token helpers ────────────────────────────────────────────────────────
+// ── HMAC Token helpers ────────────────────────────────────────────────────────
 async function signToken(secret, payload) {
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey(
@@ -57,14 +49,38 @@ async function isAuthed(req, env) {
 }
 
 // ── D1 helpers ────────────────────────────────────────────────────────────────
-async function getRooms(db) {
-  const { results } = await db.prepare('SELECT * FROM rooms ORDER BY id').all();
-  return results.map(r => ({ id: r.id, num: r.num, clean: !!r.clean, repair: !!r.repair }));
+
+// Sites
+async function getSites(db) {
+  const { results } = await db.prepare(
+    'SELECT * FROM sites WHERE is_active = 1 ORDER BY id'
+  ).all();
+  return results;
 }
 
-async function getBookings(db) {
-  const { results: bRows } = await db.prepare('SELECT * FROM bookings ORDER BY checkin').all();
-  const { results: sRows } = await db.prepare('SELECT * FROM booking_segments ORDER BY booking_id, checkin').all();
+// Rooms — optionally filtered by site_id
+async function getRooms(db, siteId) {
+  const q = siteId
+    ? 'SELECT * FROM rooms WHERE site_id = ?1 ORDER BY id'
+    : 'SELECT * FROM rooms ORDER BY id';
+  const stmt = siteId ? db.prepare(q).bind(+siteId) : db.prepare(q);
+  const { results } = await stmt.all();
+  return results.map(r => ({
+    id: r.id, num: r.num, clean: !!r.clean, repair: !!r.repair, siteId: r.site_id,
+  }));
+}
+
+// Bookings — optionally filtered by site_id (via rooms join)
+async function getBookings(db, siteId) {
+  const q = siteId
+    ? 'SELECT b.* FROM bookings b JOIN rooms r ON b.room_id = r.id WHERE r.site_id = ?1 ORDER BY b.checkin'
+    : 'SELECT * FROM bookings ORDER BY checkin';
+  const stmt = siteId ? db.prepare(q).bind(+siteId) : db.prepare(q);
+  const { results: bRows } = await stmt.all();
+
+  const { results: sRows } = await db.prepare(
+    'SELECT * FROM booking_segments ORDER BY booking_id, checkin'
+  ).all();
   const segMap = {};
   sRows.forEach(s => {
     if (!segMap[s.booking_id]) segMap[s.booking_id] = [];
@@ -72,11 +88,11 @@ async function getBookings(db) {
   });
   return bRows.map(b => ({
     id: b.id, roomId: b.room_id, name: b.name,
-    company: b.company||'', role: b.role||'',
+    company: b.company || '', role: b.role || '',
     checkin: b.checkin, checkout: b.checkout,
     clean: !!b.clean, repair: !!b.repair,
-    notes: b.notes||'', color: b.color,
-    rosterPattern: b.roster_pattern||'', offweek: b.offweek,
+    notes: b.notes || '', color: b.color,
+    rosterPattern: b.roster_pattern || '', offweek: b.offweek,
     segments: segMap[b.id] || [],
   }));
 }
@@ -92,10 +108,11 @@ async function upsertBooking(db, b) {
       color=excluded.color, roster_pattern=excluded.roster_pattern, offweek=excluded.offweek
   `).bind(b.id,b.roomId,b.name,b.company||'',b.role||'',b.checkin,b.checkout,
           b.clean?1:0,b.repair?1:0,b.notes||'',b.color||0,b.rosterPattern||'',b.offweek||'held').run();
+
   await db.prepare('DELETE FROM booking_segments WHERE booking_id=?1').bind(b.id).run();
   for (const s of (b.segments||[]))
     await db.prepare('INSERT INTO booking_segments (booking_id,checkin,checkout,is_on) VALUES (?1,?2,?3,?4)')
-      .bind(b.id, s.checkin, s.checkout, s.isOn?1:0).run();
+      .bind(b.id,s.checkin,s.checkout,s.isOn?1:0).run();
 }
 
 async function deleteBookingById(db, id) {
@@ -111,71 +128,87 @@ async function updateRoom(db, r) {
 // ── Router ────────────────────────────────────────────────────────────────────
 export default {
   async fetch(request, env) {
-    const url  = new URL(request.url);
-    const path = url.pathname;
+    const url    = new URL(request.url);
+    const path   = url.pathname;
+    const method = request.method;
 
-    if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
+    if (method === 'OPTIONS') return new Response(null, { headers: CORS });
 
-    // POST /api/auth — password in, signed token out
-    if (path === '/api/auth' && request.method === 'POST') {
+    // POST /api/auth — validate password, return signed session token
+    if (path === '/api/auth' && method === 'POST') {
       const body = await request.json().catch(() => ({}));
       if (body.password !== env.APP_PASSWORD) return err('Invalid password', 401);
       const token = await signToken(env.TOKEN_SECRET, {
-        exp: Date.now() + 8 * 60 * 60 * 1000,   // 8-hour session
+        exp: Date.now() + 8 * 60 * 60 * 1000,
       });
       return json({ token });
     }
 
-    // All other routes — must have valid session token
     if (!await isAuthed(request, env)) return err('Unauthorised', 401);
 
-    const db = env.DB;
-    try {
-      if (path === '/api/rooms' && request.method === 'GET')
-        return json(await getRooms(db));
+    const db     = env.DB;
+    // ?site=1 or ?site=2 — filter all responses by site
+    const siteId = url.searchParams.get('site') || null;
 
-      if (path.match(/^\/api\/rooms\/\d+$/) && request.method === 'PUT') {
+    try {
+      // GET /api/sites
+      if (path === '/api/sites' && method === 'GET')
+        return json(await getSites(db));
+
+      // GET /api/rooms[?site=N]
+      if (path === '/api/rooms' && method === 'GET')
+        return json(await getRooms(db, siteId));
+
+      // PUT /api/rooms/:id
+      if (path.match(/^\/api\/rooms\/\d+$/) && method === 'PUT') {
         const id = +path.split('/').pop();
         const body = await request.json();
         await updateRoom(db, { id, clean: body.clean, repair: body.repair });
         return json({ ok: true });
       }
 
-      if (path === '/api/bookings' && request.method === 'GET')
-        return json(await getBookings(db));
+      // GET /api/bookings[?site=N]
+      if (path === '/api/bookings' && method === 'GET')
+        return json(await getBookings(db, siteId));
 
-      if (path === '/api/bookings' && request.method === 'POST') {
+      // POST /api/bookings
+      if (path === '/api/bookings' && method === 'POST') {
         const b = await request.json();
         if (!b.id||!b.roomId||!b.name||!b.checkin||!b.checkout) return err('Missing required fields');
         await upsertBooking(db, b);
         return json({ ok: true, id: b.id });
       }
 
-      if (path.match(/^\/api\/bookings\/[^/]+$/) && request.method === 'PUT') {
+      // PUT /api/bookings/:id
+      if (path.match(/^\/api\/bookings\/[^/]+$/) && method === 'PUT') {
         const id = decodeURIComponent(path.split('/').pop());
         const b  = await request.json(); b.id = id;
         await upsertBooking(db, b);
         return json({ ok: true });
       }
 
-      if (path.match(/^\/api\/bookings\/[^/]+$/) && request.method === 'DELETE') {
+      // DELETE /api/bookings/:id
+      if (path.match(/^\/api\/bookings\/[^/]+$/) && method === 'DELETE') {
         await deleteBookingById(db, decodeURIComponent(path.split('/').pop()));
         return json({ ok: true });
       }
 
-      if (path === '/api/checkins' && request.method === 'GET') {
+      // GET /api/checkins?date=YYYY-MM-DD[&site=N]
+      if (path === '/api/checkins' && method === 'GET') {
         const date = url.searchParams.get('date') || new Date().toISOString().slice(0,10);
-        const bks  = await getBookings(db);
+        const bks  = await getBookings(db, siteId);
         return json(bks.filter(b => b.checkin===date || (b.segments&&b.segments.some(s=>s.checkin===date&&s.isOn))));
       }
 
-      if (path === '/api/checkouts' && request.method === 'GET') {
+      // GET /api/checkouts?date=YYYY-MM-DD[&site=N]
+      if (path === '/api/checkouts' && method === 'GET') {
         const date = url.searchParams.get('date') || new Date().toISOString().slice(0,10);
-        const bks  = await getBookings(db);
+        const bks  = await getBookings(db, siteId);
         return json(bks.filter(b => b.checkout===date || (b.segments&&b.segments.some(s=>s.checkout===date))));
       }
 
-      if (path === '/api/import' && request.method === 'POST') {
+      // POST /api/import
+      if (path === '/api/import' && method === 'POST') {
         const { bookings: bArr=[], rooms: rArr=[] } = await request.json();
         for (const r of rArr) await updateRoom(db, r);
         for (const b of bArr) await upsertBooking(db, b);
@@ -185,7 +218,10 @@ export default {
       return err('Not found', 404);
     } catch (e) {
       console.error(e);
-      return err('Internal error: ' + e.message, 500);
+      return new Response(JSON.stringify({ error: 'Internal error: ' + e.message }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json', ...CORS },
+      });
     }
   },
 };
