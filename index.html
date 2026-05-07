@@ -503,14 +503,14 @@ const App = {};
 // Layer 1 — Config
 // ─────────────────────────────────────────────────────────────────────────────
 App.Config = {
-  WORKER_URL:  'https://campbook2.alvinkc.workers.dev',
+  WORKER_URL:  'https://round-base-c41d.alvinkc.workers.dev',
   SESSION_MS:  8 * 60 * 60 * 1000,   // 8 hours — must match worker
   LS_TOKEN:    'campalloc_token_v1',   // localStorage key for session token
   TOTAL_ROOMS: 83,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Layer 2 — Data: API  (D1 REST protocol via campbook2 worker)
+// Layer 2 — Data: API  (D1 REST protocol via round-base-c41d worker)
 // Routes served by workers/worker.js + Cloudflare D1:
 //   GET    /api/rooms
 //   PUT    /api/rooms/:id
