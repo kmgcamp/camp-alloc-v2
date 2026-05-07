@@ -1094,8 +1094,10 @@ App.UI.DBStatus = {
     const banner = document.getElementById('dbBanner');
     if (!banner) return;
 
-    const isPlaceholder = !rooms || rooms.length === 0 || rooms.some(r => r._placeholder);
-    if (!isPlaceholder) { banner.style.display = 'none'; return; }
+    // Only show warning if ALL rooms are placeholders (none from real DB)
+    const allPlaceholder = !rooms || rooms.length === 0 || rooms.every(r => r._placeholder);
+    if (!allPlaceholder) { banner.style.display = 'none'; return; }
+    const isPlaceholder = allPlaceholder;
 
     // Show warning with a Check DB button
     banner.style.display = '';
@@ -1693,11 +1695,10 @@ App.UI.BookingForm = {
     const rots=+document.getElementById('f-rotations').value||1;
     if (!fn) { App.UI.showToast('First name is required',true); return; }
     if (!this.selectedRoom) { App.UI.showToast('Please select a room',true); return; }
-    // Block booking if rooms are placeholders (D1 migrations not run yet)
+    // Warn if room looks like a placeholder (no real DB data yet)
     const _selectedRoom = App.Data.Store.rooms.find(r => r.id === this.selectedRoom);
     if (_selectedRoom && _selectedRoom._placeholder) {
-      App.UI.showToast('Cannot save booking — rooms not loaded from database yet. Run D1 migrations first.', true);
-      return;
+      console.warn('Selected room is a placeholder — attempting save anyway');
     }
     if (!cin||!cout) { App.UI.showToast('Please enter check-in and check-out dates',true); return; }
     if (cin>cout) { App.UI.showToast('Check-out must be after check-in',true); return; }
