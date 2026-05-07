@@ -52,31 +52,63 @@ async function isAuthed(req, env) {
 
 // Sites
 async function getSites(db) {
-  const { results } = await db.prepare(
-    'SELECT * FROM sites WHERE is_active = 1 ORDER BY id'
-  ).all();
-  return results;
+  try {
+    const { results } = await db.prepare(
+      'SELECT * FROM sites WHERE is_active = 1 ORDER BY id'
+    ).all();
+    return results;
+  } catch (e) {
+    // sites table may not exist yet — return defaults
+    if (e.message && (e.message.includes('no such table') || e.message.includes('no such column'))) {
+      return [
+        { id: 1, slug: 'doon-doon', name: 'Doon Doon Camp',       room_count: 83, is_active: 1 },
+        { id: 2, slug: 'wyndham',   name: 'Wyndham Airport Camp',  room_count: 16, is_active: 1 },
+      ];
+    }
+    throw e;
+  }
 }
 
-// Rooms — optionally filtered by site_id
+// Rooms — optionally filtered by site_id (falls back if column missing)
 async function getRooms(db, siteId) {
-  const q = siteId
-    ? 'SELECT * FROM rooms WHERE site_id = ?1 ORDER BY id'
-    : 'SELECT * FROM rooms ORDER BY id';
-  const stmt = siteId ? db.prepare(q).bind(+siteId) : db.prepare(q);
-  const { results } = await stmt.all();
-  return results.map(r => ({
-    id: r.id, num: r.num, clean: !!r.clean, repair: !!r.repair, siteId: r.site_id,
-  }));
+  try {
+    const q = siteId
+      ? 'SELECT * FROM rooms WHERE site_id = ?1 ORDER BY id'
+      : 'SELECT * FROM rooms ORDER BY id';
+    const stmt = siteId ? db.prepare(q).bind(+siteId) : db.prepare(q);
+    const { results } = await stmt.all();
+    return results.map(r => ({
+      id: r.id, num: r.num, clean: !!r.clean, repair: !!r.repair, siteId: r.site_id || 1,
+    }));
+  } catch (e) {
+    // site_id column may not exist yet (migration 0004 not run) — fall back to all rooms
+    if (e.message && e.message.includes('no such column')) {
+      const { results } = await db.prepare('SELECT * FROM rooms ORDER BY id').all();
+      return results.map(r => ({
+        id: r.id, num: r.num, clean: !!r.clean, repair: !!r.repair, siteId: 1,
+      }));
+    }
+    throw e;
+  }
 }
 
 // Bookings — optionally filtered by site_id (via rooms join)
 async function getBookings(db, siteId) {
-  const q = siteId
-    ? 'SELECT b.* FROM bookings b JOIN rooms r ON b.room_id = r.id WHERE r.site_id = ?1 ORDER BY b.checkin'
-    : 'SELECT * FROM bookings ORDER BY checkin';
-  const stmt = siteId ? db.prepare(q).bind(+siteId) : db.prepare(q);
-  const { results: bRows } = await stmt.all();
+  let bRows;
+  try {
+    const q = siteId
+      ? 'SELECT b.* FROM bookings b JOIN rooms r ON b.room_id = r.id WHERE r.site_id = ?1 ORDER BY b.checkin'
+      : 'SELECT * FROM bookings ORDER BY checkin';
+    const stmt = siteId ? db.prepare(q).bind(+siteId) : db.prepare(q);
+    const res = await stmt.all();
+    bRows = res.results;
+  } catch (e) {
+    // Fallback if site_id column missing
+    if (e.message && e.message.includes('no such column')) {
+      const res = await db.prepare('SELECT * FROM bookings ORDER BY checkin').all();
+      bRows = res.results;
+    } else { throw e; }
+  }
 
   const { results: sRows } = await db.prepare(
     'SELECT * FROM booking_segments ORDER BY booking_id, checkin'
