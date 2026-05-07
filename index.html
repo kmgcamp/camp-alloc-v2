@@ -671,8 +671,13 @@ App.Data.Store = {
   // Generate placeholder rooms from site config when API is unavailable
   _seedRoomsFromConfig(site) {
     const prefix = site.prefix || 'R';
+    // Offsets match migration-seeded IDs in D1:
+    //   Site 1 Doon Doon:       1–83
+    //   Site 2 Wyndham Airport: 84–99
+    const ID_OFFSETS = { 1: 0, 2: 83 };
+    const offset = (ID_OFFSETS[site.id] !== undefined) ? ID_OFFSETS[site.id] : (site.id - 1) * 100;
     return Array.from({ length: site.roomCount }, (_, i) => ({
-      id:     1000 + i,   // temp IDs won't clash with real ones
+      id:     offset + i + 1,
       num:    `${prefix}${String(i + 1).padStart(2, '0')}`,
       clean:  true,
       repair: false,
@@ -1545,6 +1550,12 @@ App.UI.BookingForm = {
     const rots=+document.getElementById('f-rotations').value||1;
     if (!fn) { App.UI.showToast('First name is required',true); return; }
     if (!this.selectedRoom) { App.UI.showToast('Please select a room',true); return; }
+    // Block booking if rooms are placeholders (D1 migrations not run yet)
+    const _selectedRoom = App.Data.Store.rooms.find(r => r.id === this.selectedRoom);
+    if (_selectedRoom && _selectedRoom._placeholder) {
+      App.UI.showToast('Cannot save booking — rooms not loaded from database yet. Run D1 migrations first.', true);
+      return;
+    }
     if (!cin||!cout) { App.UI.showToast('Please enter check-in and check-out dates',true); return; }
     if (cin>cout) { App.UI.showToast('Check-out must be after check-in',true); return; }
     const fullName=(fn+(ln?' '+ln:'')).trim();
