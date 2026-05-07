@@ -62,7 +62,7 @@ async function getSites(db) {
     if (e.message && (e.message.includes('no such table') || e.message.includes('no such column'))) {
       return [
         { id: 1, slug: 'doon-doon', name: 'Doon Doon Camp',       room_count: 83, is_active: 1 },
-        { id: 2, slug: 'wyndham',   name: 'Wyndham Airport Camp',  room_count: 16, is_active: 1 },
+        { id: 2, slug: 'wyndham',   name: 'Wyndham Camp',  room_count: 16, is_active: 1 },
       ];
     }
     throw e;

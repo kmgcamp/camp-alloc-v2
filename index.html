@@ -7,7 +7,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Camp Allocation — Wyndham Airport Camp</title>
+<title>Camp Allocation — Wyndham Camp</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;900&family=Barlow:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -242,7 +242,7 @@
 <!-- ══ LOGIN SCREEN ══ -->
 <div id="loginScreen" class="login-screen" style="display:none">
   <div class="login-logo">Camp<span>Alloc</span></div>
-  <div class="login-site">Wyndham Airport Camp — Room Management</div>
+  <div class="login-site">Wyndham Camp — Room Management</div>
   <div class="login-card">
     <h2>🔒 Enter Password</h2>
     <p>This system is for authorised camp staff only.</p>
@@ -525,7 +525,7 @@ App.Config = {
   // Site definitions — must match DB sites table
   SITES: [
     { id: 1, slug: 'doon-doon', name: 'Doon Doon Camp',       roomCount: 83, prefix: 'R' },
-    { id: 2, slug: 'wyndham',   name: 'Wyndham Airport Camp', roomCount: 16, prefix: 'W' },
+    { id: 2, slug: 'wyndham',   name: 'Wyndham Camp', roomCount: 16, prefix: 'W' },
   ],
   LS_SITE: 'campalloc_site_v1',  // localStorage key for active site
 };
@@ -631,6 +631,9 @@ App.Site = {
     App.Data.Store.load().then(() => {
       App.UI.hideLoading();
       App.UI.DBStatus.check(App.Data.Store.rooms);
+      // Update page title to active site
+      const _t = document.querySelector('.overview-title');
+      if (_t) _t.textContent = site.name + ' — Room Allocation';
       App.UI.Calendar.render();
       App.UI.updateStats();
       App.UI.BookingForm.renderRoomPicker();
@@ -683,7 +686,7 @@ App.Data.Store = {
     const prefix = site.prefix || 'R';
     // Offsets match migration-seeded IDs in D1:
     //   Site 1 Doon Doon:       1–83
-    //   Site 2 Wyndham Airport: 84–99
+    //   Site 2 Wyndham: 84–99
     const ID_OFFSETS = { 1: 0, 2: 83 };
     const offset = (ID_OFFSETS[site.id] !== undefined) ? ID_OFFSETS[site.id] : (site.id - 1) * 100;
     return Array.from({ length: site.roomCount }, (_, i) => ({

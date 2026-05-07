@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS sites (
 -- STATEMENT 2: Seed the two sites
 INSERT OR IGNORE INTO sites (id, slug, name, room_count) VALUES
   (1, 'doon-doon', 'Doon Doon Camp',       83),
-  (2, 'wyndham',   'Wyndham Airport Camp', 16);
+  (2, 'wyndham',   'Wyndham Camp', 16);
 
 -- STATEMENT 3: Add site_id column to rooms (defaults to 1 = Doon Doon)
 ALTER TABLE rooms ADD COLUMN site_id INTEGER NOT NULL DEFAULT 1 REFERENCES sites(id);
