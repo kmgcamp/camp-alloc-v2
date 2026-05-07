@@ -6,7 +6,7 @@
 -- STATEMENT 1: Create sites table
 CREATE TABLE IF NOT EXISTS sites (
   id         INTEGER PRIMARY KEY,
-  slug       TEXT    NOT NULL UNIQUE,  -- e.g. 'kununurra', 'wyndham'
+  slug       TEXT    NOT NULL UNIQUE,  -- e.g. 'doon-doon', 'wyndham'
   name       TEXT    NOT NULL,         -- display name
   room_count INTEGER NOT NULL DEFAULT 0,
   is_active  INTEGER NOT NULL DEFAULT 1
@@ -14,10 +14,10 @@ CREATE TABLE IF NOT EXISTS sites (
 
 -- STATEMENT 2: Seed the two sites
 INSERT OR IGNORE INTO sites (id, slug, name, room_count) VALUES
-  (1, 'kununurra', 'Kununurra Camp',       83),
+  (1, 'doon-doon', 'Doon Doon Camp',       83),
   (2, 'wyndham',   'Wyndham Airport Camp', 16);
 
--- STATEMENT 3: Add site_id column to rooms (defaults to 1 = Kununurra)
+-- STATEMENT 3: Add site_id column to rooms (defaults to 1 = Doon Doon)
 ALTER TABLE rooms ADD COLUMN site_id INTEGER NOT NULL DEFAULT 1 REFERENCES sites(id);
 
 -- STATEMENT 4: Seed Wyndham rooms W01–W16
