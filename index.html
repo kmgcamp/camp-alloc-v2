@@ -442,7 +442,7 @@
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
           <div style="display:flex;flex-direction:column;gap:6px">
             <label>From Month</label>
-            <select id="rpt-from">
+            <select id="rpt-from" onchange="App.UI.Reports.updatePreview()">
               <option value="0">January</option><option value="1">February</option><option value="2">March</option>
               <option value="3">April</option><option value="4">May</option><option value="5">June</option>
               <option value="6">July</option><option value="7">August</option><option value="8">September</option>
@@ -451,7 +451,7 @@
           </div>
           <div style="display:flex;flex-direction:column;gap:6px">
             <label>To Month</label>
-            <select id="rpt-to">
+            <select id="rpt-to" onchange="App.UI.Reports.updatePreview()">
               <option value="0">January</option><option value="1">February</option><option value="2">March</option>
               <option value="3">April</option><option value="4">May</option><option value="5">June</option>
               <option value="6">July</option><option value="7">August</option><option value="8">September</option>
