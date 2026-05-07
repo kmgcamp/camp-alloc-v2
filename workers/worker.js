@@ -176,6 +176,26 @@ export default {
       return json({ token });
     }
 
+    // GET /api/health — public endpoint to verify worker + DB connection
+    if (path === '/api/health' && method === 'GET') {
+      const status = { worker: 'ok', db: null, tables: [], error: null };
+      try {
+        const { results } = await env.DB.prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+        ).all();
+        status.db = 'connected';
+        status.tables = results.map(r => r.name);
+        const roomCount = await env.DB.prepare('SELECT COUNT(*) as n FROM rooms').first();
+        status.roomCount = roomCount?.n ?? 0;
+        status.migrationsRun = status.tables.includes('rooms') && status.roomCount > 0;
+      } catch (e) {
+        status.db = 'error';
+        status.error = e.message;
+        status.migrationsRun = false;
+      }
+      return json(status);
+    }
+
     if (!await isAuthed(request, env)) return err('Unauthorised', 401);
 
     const db     = env.DB;

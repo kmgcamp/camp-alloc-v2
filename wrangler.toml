@@ -1,0 +1,13 @@
+# wrangler.toml
+name              = "round-base-c41d"
+main              = "workers/worker.js"
+compatibility_date = "2024-01-01"
+
+[[d1_databases]]
+binding       = "DB"
+database_name = "campallocation"
+database_id   = "8b231226-1c85-4ef1-9e52-08409ce8f3a3"
+
+# Secrets — set in Cloudflare dashboard (Worker → Settings → Variables and Secrets):
+#   APP_PASSWORD  — login password (e.g. kmetgroup123!)
+#   TOKEN_SECRET  — random 32+ char string for signing session tokens

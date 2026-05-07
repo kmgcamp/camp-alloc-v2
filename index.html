@@ -1094,39 +1094,119 @@ App.UI.DBStatus = {
     const banner = document.getElementById('dbBanner');
     if (!banner) return;
 
-    if (!rooms || rooms.length === 0) {
-      // Worker connected but DB totally empty
-      banner.style.display = '';
+    const isPlaceholder = !rooms || rooms.length === 0 || rooms.some(r => r._placeholder);
+    if (!isPlaceholder) { banner.style.display = 'none'; return; }
+
+    // Show warning with a Check DB button
+    banner.style.display = '';
+    banner.innerHTML = `<div class="db-banner">
+      <span>⚠</span>
+      <div class="db-banner-msg">
+        <strong>Database not connected or empty</strong> — showing placeholder rooms.
+        Bookings cannot be saved until D1 is set up and migrations are run.
+      </div>
+      <button class="db-banner-btn" onclick="App.UI.DBStatus.runHealthCheck()">🔍 Check DB</button>
+    </div>`;
+  },
+
+  async runHealthCheck() {
+    const banner = document.getElementById('dbBanner');
+    banner.innerHTML = `<div class="db-banner"><span>⏳</span><div class="db-banner-msg">Checking database connection...</div></div>`;
+
+    try {
+      const r = await fetch(App.Config.WORKER_URL + '/api/health');
+      const h = await r.json();
+
+      if (h.error && h.error.includes("Cannot read properties of undefined")) {
+        // env.DB is undefined — binding not set in Cloudflare dashboard
+        banner.innerHTML = `<div class="db-banner error">
+          <span>🔴</span>
+          <div class="db-banner-msg">
+            <strong>D1 binding missing</strong> — the worker cannot find the database.<br>
+            Go to <strong>Cloudflare → round-base-c41d → Settings → Bindings</strong> and add:<br>
+            Variable name: <code style="background:rgba(0,0,0,.2);padding:1px 6px;border-radius:3px">DB</code>
+            → select database <code style="background:rgba(0,0,0,.2);padding:1px 6px;border-radius:3px">campallocation</code>
+            → Save → Deploy
+          </div>
+        </div>`;
+        return;
+      }
+
+      if (h.db === 'error' && h.error && h.error.includes('no such table')) {
+        // DB connected but migrations not run
+        banner.innerHTML = `<div class="db-banner error">
+          <span>🔴</span>
+          <div class="db-banner-msg">
+            <strong>D1 connected but migrations not run</strong> — tables do not exist yet.<br>
+            Run these SQL files in <strong>Cloudflare → D1 → campallocation → Console</strong>
+            (one statement at a time):<br>
+            <code style="background:rgba(0,0,0,.2);padding:1px 6px;border-radius:3px">migrations/0001_init.sql</code> →
+            <code style="background:rgba(0,0,0,.2);padding:1px 6px;border-radius:3px">migrations/0002_add_rooms_81_83.sql</code> →
+            <code style="background:rgba(0,0,0,.2);padding:1px 6px;border-radius:3px">migrations/0004_multi_site.sql</code>
+          </div>
+        </div>`;
+        return;
+      }
+
+      if (h.db === 'connected' && !h.migrationsRun) {
+        // DB connected, tables exist but rooms table is empty
+        banner.innerHTML = `<div class="db-banner error">
+          <span>🔴</span>
+          <div class="db-banner-msg">
+            <strong>D1 connected, tables exist, but rooms table is empty</strong>.<br>
+            Tables found: ${h.tables.join(', ')}<br>
+            Run <code style="background:rgba(0,0,0,.2);padding:1px 6px;border-radius:3px">migrations/0001_init.sql</code>
+            in D1 Console to seed the rooms.
+          </div>
+        </div>`;
+        return;
+      }
+
+      if (h.db === 'connected' && h.migrationsRun) {
+        // Everything OK — reload data
+        banner.innerHTML = `<div class="db-banner ok">
+          <span>✅</span>
+          <div class="db-banner-msg">
+            <strong>Database connected!</strong>
+            ${h.roomCount} rooms found across ${h.tables.length} tables. Reloading...
+          </div>
+        </div>`;
+        setTimeout(async () => {
+          await App.Data.Store.load();
+          App.UI.DBStatus.check(App.Data.Store.rooms);
+          App.UI.Calendar.render();
+          App.UI.updateStats();
+          App.UI.BookingForm.renderRoomPicker();
+        }, 1500);
+        return;
+      }
+
+      // Unknown state
       banner.innerHTML = `<div class="db-banner error">
         <span>⚠</span>
-        <div class="db-banner-msg">Database is empty — no rooms found. Please run the D1 migrations (0001_init.sql, 0002_add_rooms_81_83.sql) in your Cloudflare D1 console.</div>
-      </div>`;
-      return;
-    }
-
-    const isPlaceholder = rooms.some(r => r._placeholder);
-    if (isPlaceholder) {
-      // Showing generated rooms — worker not returning real data
-      banner.style.display = '';
-      banner.innerHTML = `<div class="db-banner">
-        <span>⚠</span>
         <div class="db-banner-msg">
-          Showing placeholder rooms — database not connected or empty.
-          Rooms are read-only until D1 migrations are run and worker is deployed.
-          Bookings cannot be saved.
+          Worker: ${h.worker} | DB: ${h.db} | Tables: ${(h.tables||[]).join(', ')||'none'}
+          ${h.error ? '<br>Error: ' + h.error : ''}
         </div>
-        <button class="db-banner-btn" onclick="App.UI.DBStatus.dismiss()">Dismiss</button>
+        <button class="db-banner-btn" onclick="App.UI.DBStatus.runHealthCheck()">Retry</button>
       </div>`;
-      return;
-    }
 
-    // Real rooms loaded — hide banner
-    banner.style.display = 'none';
+    } catch (e) {
+      banner.innerHTML = `<div class="db-banner error">
+        <span>🔴</span>
+        <div class="db-banner-msg">
+          <strong>Cannot reach worker</strong> at ${App.Config.WORKER_URL}<br>
+          Check that the worker is deployed: Cloudflare → Workers & Pages → round-base-c41d → Edit code → Deploy
+          <br><small>${e.message}</small>
+        </div>
+        <button class="db-banner-btn" onclick="App.UI.DBStatus.runHealthCheck()">Retry</button>
+      </div>`;
+    }
   },
 
   dismiss() {
-    const banner = document.getElementById('dbBanner');
-    if (banner) banner.style.display = 'none';
+    const el = document.getElementById('dbBanner');
+    if (el) el.style.display = 'none';
   },
 };
 
