@@ -5,7 +5,7 @@ compatibility_date = "2024-01-01"
 
 [[d1_databases]]
 binding       = "DB"
-database_name = "campallocation"
+database_name = "campallocationv2"
 database_id   = "8b231226-1c85-4ef1-9e52-08409ce8f3a3"
 
 # Secrets — set in Cloudflare dashboard (Worker → Settings → Variables and Secrets):
