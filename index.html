@@ -1181,22 +1181,31 @@ App.UI.DBStatus = {
         return;
       }
 
-      // Unknown state
+      // Unknown or old worker (no health endpoint) — show deploy instructions
       banner.innerHTML = `<div class="db-banner error">
-        <span>⚠</span>
+        <span>🔴</span>
         <div class="db-banner-msg">
-          Worker: ${h.worker} | DB: ${h.db} | Tables: ${(h.tables||[]).join(', ')||'none'}
-          ${h.error ? '<br>Error: ' + h.error : ''}
+          <strong>Worker code is outdated or not deployed</strong> — the health endpoint is missing.<br>
+          Go to <strong>Cloudflare → round-base-c41d → Edit code</strong>,
+          paste the full contents of <code style="background:rgba(0,0,0,.2);padding:1px 4px;border-radius:3px">workers/worker.js</code>
+          from the GitHub repo, then click <strong>Deploy</strong>.
+          <br><small>Response: Worker=${h.worker||'?'} DB=${h.db||'?'} Error=${h.error||'none'}</small>
         </div>
         <button class="db-banner-btn" onclick="App.UI.DBStatus.runHealthCheck()">Retry</button>
       </div>`;
 
     } catch (e) {
+      const isUnauth = e.message && e.message.toLowerCase().includes('unauthori');
       banner.innerHTML = `<div class="db-banner error">
         <span>🔴</span>
         <div class="db-banner-msg">
-          <strong>Cannot reach worker</strong> at ${App.Config.WORKER_URL}<br>
-          Check that the worker is deployed: Cloudflare → Workers & Pages → round-base-c41d → Edit code → Deploy
+          ${isUnauth
+            ? `<strong>Worker is running old code</strong> — the /api/health endpoint doesn't exist yet.<br>
+               Paste the latest <code style="background:rgba(0,0,0,.2);padding:1px 4px;border-radius:3px">workers/worker.js</code>
+               into <strong>Cloudflare → round-base-c41d → Edit code → Deploy</strong>.`
+            : `<strong>Cannot reach worker</strong> at ${App.Config.WORKER_URL}<br>
+               Check the worker is deployed in Cloudflare → Workers & Pages → round-base-c41d.`
+          }
           <br><small>${e.message}</small>
         </div>
         <button class="db-banner-btn" onclick="App.UI.DBStatus.runHealthCheck()">Retry</button>
