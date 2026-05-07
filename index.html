@@ -216,6 +216,12 @@
   .toast.error{background:var(--red);}.toast.show{display:block;}
   @keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:none}}
   .empty-state{text-align:center;padding:40px;color:var(--text-muted);font-family:var(--font-head);font-size:14px;letter-spacing:1px;text-transform:uppercase;}
+  .db-banner{background:var(--yellow-dim);border:1px solid var(--yellow);border-radius:var(--radius);padding:14px 20px;margin:16px 24px 0;display:flex;align-items:center;gap:12px;font-family:var(--font-head);font-size:13px;font-weight:700;letter-spacing:.5px;color:var(--yellow);}
+  .db-banner.error{background:var(--red-dim);border-color:var(--red);color:var(--red);}
+  .db-banner.ok{background:var(--green-dim);border-color:var(--green);color:var(--green);}
+  .db-banner-msg{flex:1;}
+  .db-banner-btn{background:var(--yellow);color:#000;border:none;border-radius:4px;padding:6px 14px;font-family:var(--font-head);font-size:12px;font-weight:900;letter-spacing:1px;cursor:pointer;text-transform:uppercase;white-space:nowrap;}
+  .db-banner.error .db-banner-btn{background:var(--red);color:#fff;}
   .empty-state .icon{font-size:32px;margin-bottom:10px;}
   ::-webkit-scrollbar{width:6px;height:6px;}::-webkit-scrollbar-track{background:var(--bg);}::-webkit-scrollbar-thumb{background:#bbbbc8;border-radius:3px;}
   @media(max-width:600px){.form-grid{grid-template-columns:1fr}.overview-stats{display:none}.room-picker{grid-template-columns:repeat(5,1fr)}}
@@ -274,6 +280,9 @@
       <button class="btn-signout" onclick="App.Auth.doLogout()">🔒 Lock</button>
     </div>
   </nav>
+
+  <!-- DB STATUS BANNER -->
+  <div id="dbBanner" style="display:none"></div>
 
   <!-- OVERVIEW -->
   <div class="page active" id="page-overview">
@@ -621,6 +630,7 @@ App.Site = {
     App.UI.showLoading('Switching to ' + site.name + '...');
     App.Data.Store.load().then(() => {
       App.UI.hideLoading();
+      App.UI.DBStatus.check(App.Data.Store.rooms);
       App.UI.Calendar.render();
       App.UI.updateStats();
       App.UI.BookingForm.renderRoomPicker();
@@ -1073,6 +1083,50 @@ App.UI = {
     document.getElementById('stat-vacant').textContent=App.Data.Store.rooms.length-occ;
     document.getElementById('stat-repair').textContent=ROOMS.filter(r=>r.repair).length;
     document.getElementById('stat-dirty').textContent=ROOMS.filter(r=>!r.clean).length;
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Layer 4 — UI: Database status banner
+// ─────────────────────────────────────────────────────────────────────────────
+App.UI.DBStatus = {
+  check(rooms) {
+    const banner = document.getElementById('dbBanner');
+    if (!banner) return;
+
+    if (!rooms || rooms.length === 0) {
+      // Worker connected but DB totally empty
+      banner.style.display = '';
+      banner.innerHTML = `<div class="db-banner error">
+        <span>⚠</span>
+        <div class="db-banner-msg">Database is empty — no rooms found. Please run the D1 migrations (0001_init.sql, 0002_add_rooms_81_83.sql) in your Cloudflare D1 console.</div>
+      </div>`;
+      return;
+    }
+
+    const isPlaceholder = rooms.some(r => r._placeholder);
+    if (isPlaceholder) {
+      // Showing generated rooms — worker not returning real data
+      banner.style.display = '';
+      banner.innerHTML = `<div class="db-banner">
+        <span>⚠</span>
+        <div class="db-banner-msg">
+          Showing placeholder rooms — database not connected or empty.
+          Rooms are read-only until D1 migrations are run and worker is deployed.
+          Bookings cannot be saved.
+        </div>
+        <button class="db-banner-btn" onclick="App.UI.DBStatus.dismiss()">Dismiss</button>
+      </div>`;
+      return;
+    }
+
+    // Real rooms loaded — hide banner
+    banner.style.display = 'none';
+  },
+
+  dismiss() {
+    const banner = document.getElementById('dbBanner');
+    if (banner) banner.style.display = 'none';
   },
 };
 
@@ -1785,6 +1839,7 @@ App.bootstrap = async function() {
     App.UI.showToast('Could not load data: '+e.message, true);
   }
   App.UI.hideLoading();
+  App.UI.DBStatus.check(App.Data.Store.rooms);
   App.UI.Calendar.render();
   App.UI.updateStats();
   App.UI.BookingForm.renderRoomPicker();
