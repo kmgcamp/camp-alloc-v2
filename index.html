@@ -1646,7 +1646,7 @@ App.UI.BookingForm = {
         }
         return false;
       });
-      const isSel=this.selectedRoom===room.id;
+      const isSel=+this.selectedRoom===+room.id;
       let cls='',tag='';
       if (isSel) cls='selected'; else if (isRepair){cls='repair';tag='Repair';} else if (conflict){cls='occupied';tag='Booked';}
       return `<div class="room-option ${cls}" onclick="App.UI.BookingForm.selectRoom(${room.id},'${cls}')">${room.num}<span class="room-tag">${tag}</span></div>`;
@@ -1655,7 +1655,8 @@ App.UI.BookingForm = {
 
   selectRoom(id, cls) {
     if (cls==='repair'||cls==='occupied') return;
-    this.selectedRoom=id; this.renderRoomPicker();
+    this.selectedRoom=+id;  // coerce to number — HTML attributes are strings
+    this.renderRoomPicker();
   },
 
   onRosterChange() {
@@ -1705,7 +1706,7 @@ App.UI.BookingForm = {
     const fullName=(fn+(ln?' '+ln:'')).trim();
     let segs=[];
     if (pattern) { const[on,off]=pattern.split('/').map(Number); segs=App.Service.Roster.buildSegments(App.Service.Dates.parse(cin),on,off,rots); }
-    const nb={id:String(Date.now()),roomId:this.selectedRoom,name:fullName,company:document.getElementById('f-company').value.trim(),role:document.getElementById('f-role').value.trim(),checkin:cin,checkout:cout,clean:this.isClean,repair:this.needsRepair,notes:document.getElementById('f-notes').value.trim(),color:App.Data.Store.bookings.length%6,rosterPattern:pattern,offweek,segments:segs};
+    const nb={id:String(Date.now()),roomId:+this.selectedRoom,name:fullName,company:document.getElementById('f-company').value.trim(),role:document.getElementById('f-role').value.trim(),checkin:cin,checkout:cout,clean:this.isClean,repair:this.needsRepair,notes:document.getElementById('f-notes').value.trim(),color:App.Data.Store.bookings.length%6,rosterPattern:pattern,offweek,segments:segs};
     if (App.Service.Booking.hasConflict(nb, App.Data.Store.bookings, null)) {
       App.UI.showToast('Room conflict — overlapping occupied periods',true); return;
     }
