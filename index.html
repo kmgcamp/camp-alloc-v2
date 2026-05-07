@@ -220,6 +220,11 @@
   ::-webkit-scrollbar{width:6px;height:6px;}::-webkit-scrollbar-track{background:var(--bg);}::-webkit-scrollbar-thumb{background:#bbbbc8;border-radius:3px;}
   @media(max-width:600px){.form-grid{grid-template-columns:1fr}.overview-stats{display:none}.room-picker{grid-template-columns:repeat(5,1fr)}}
 
+  /* ── Site switcher ── */
+  .site-switcher{display:flex;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-right:4px;}
+  .site-btn{background:none;border:none;color:var(--text-dim);padding:5px 12px;font-family:var(--font-head);font-size:12px;font-weight:700;letter-spacing:1px;cursor:pointer;text-transform:uppercase;transition:all .15s;white-space:nowrap;}
+  .site-btn:hover{background:var(--surface2);color:var(--text);}
+  .site-btn.active{background:var(--accent);color:#000;}
   .save-dot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block;margin-right:4px;animation:pulse 2s infinite;}
   .save-dot.saving{background:var(--yellow);animation:spin .6s linear infinite;}
   .save-dot.error{background:var(--red);animation:none;}
@@ -261,6 +266,7 @@
     </div>
     <div class="nav-spacer"></div>
     <div class="nav-right">
+      <div class="site-switcher" id="siteSwitcher"></div>
       <span id="saveIndicator" style="font-family:var(--font-head);font-size:11px;color:var(--text-muted);letter-spacing:1px;display:flex;align-items:center">
         <span class="save-dot" id="saveDot"></span><span id="saveText">Synced</span>
       </span>
@@ -505,8 +511,14 @@ const App = {};
 App.Config = {
   WORKER_URL:  'https://round-base-c41d.alvinkc.workers.dev',
   SESSION_MS:  8 * 60 * 60 * 1000,   // 8 hours — must match worker
-  LS_TOKEN:    'campalloc_token_v1',   // localStorage key for session token
-  TOTAL_ROOMS: 83,
+  LS_TOKEN:    'campalloc_token_v1',  // localStorage key for session token
+  TOTAL_ROOMS: 83,   // Kununurra default; overridden per-site on load
+  // Site definitions — must match DB sites table
+  SITES: [
+    { id: 1, slug: 'kununurra', name: 'Kununurra Camp',       roomCount: 83, prefix: 'R' },
+    { id: 2, slug: 'wyndham',   name: 'Wyndham Airport Camp', roomCount: 16, prefix: 'W' },
+  ],
+  LS_SITE: 'campalloc_site_v1',  // localStorage key for active site
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -558,8 +570,9 @@ App.Data.API = {
 
   // ── Public API methods ────────────────────────────────────────────────────
 
-  getRooms()    { return this._get('/api/rooms'); },
-  getBookings() { return this._get('/api/bookings'); },
+  getRooms(siteId)    { return this._get(`/api/rooms?site=${siteId||1}`); },
+  getBookings(siteId) { return this._get(`/api/bookings?site=${siteId||1}`); },
+  getSites()          { return this._get('/api/sites'); },
 
   updateRoom(room) {
     return this._send('PUT', `/api/rooms/${room.id}`, { clean: room.clean, repair: room.repair });
@@ -577,8 +590,8 @@ App.Data.API = {
     return this._send('DELETE', `/api/bookings/${encodeURIComponent(id)}`);
   },
 
-  getCheckins(date)  { return this._get(`/api/checkins?date=${date}`); },
-  getCheckouts(date) { return this._get(`/api/checkouts?date=${date}`); },
+  getCheckins(date)  { return this._get(`/api/checkins?date=${date}&site=${App.Site.id()}`); },
+  getCheckouts(date) { return this._get(`/api/checkouts?date=${date}&site=${App.Site.id()}`); },
 
   importData(payload) { return this._send('POST', '/api/import', payload); },
 };
@@ -586,29 +599,50 @@ App.Data.API = {
 // ─────────────────────────────────────────────────────────────────────────────
 // Layer 2 — Data: In-memory Store
 // ─────────────────────────────────────────────────────────────────────────────
-App.Data.Store = {
-  rooms: Array.from({ length: App.Config.TOTAL_ROOMS }, (_, i) => ({
-    id: i + 1,
-    num: `R${String(i + 1).padStart(2, '0')}`,
-    clean: true, repair: false,
-  })),
-  bookings: [],
+// ─────────────────────────────────────────────────────────────────────────────
+// Site manager — tracks the active site and reloads data on switch
+// ─────────────────────────────────────────────────────────────────────────────
+App.Site = {
+  _active: null,
 
-  applyRooms(apiRooms) {
-    apiRooms.forEach(r => {
-      const local = this.rooms.find(x => x.id === r.id);
-      if (local) { local.clean = r.clean; local.repair = r.repair; }
+  get() {
+    if (this._active) return this._active;
+    const saved = localStorage.getItem(App.Config.LS_SITE);
+    this._active = App.Config.SITES.find(s => s.slug === saved) || App.Config.SITES[0];
+    return this._active;
+  },
+
+  set(siteId) {
+    const site = App.Config.SITES.find(s => s.id === +siteId);
+    if (!site || site.id === this.get().id) return;
+    this._active = site;
+    localStorage.setItem(App.Config.LS_SITE, site.slug);
+    App.UI.Site.renderSwitcher();
+    App.UI.showLoading('Switching to ' + site.name + '...');
+    App.Data.Store.load().then(() => {
+      App.UI.hideLoading();
+      App.UI.Calendar.render();
+      App.UI.updateStats();
+      App.UI.BookingForm.renderRoomPicker();
+      App.UI.BookingForm.renderList();
     });
   },
 
+  id()   { return this.get().id; },
+  name() { return this.get().name; },
+};
+
+App.Data.Store = {
+  rooms: [], bookings: [],
+
   async load() {
-    // D1 returns plain arrays; rooms always exist (seeded by migration)
+    const siteId = App.Site.id();
     const [apiRooms, apiBookings] = await Promise.all([
-      App.Data.API.getRooms(),
-      App.Data.API.getBookings(),
+      App.Data.API.getRooms(siteId),
+      App.Data.API.getBookings(siteId),
     ]);
-    if (apiRooms  && apiRooms.length)   this.applyRooms(apiRooms);
-    if (apiBookings && apiBookings.length) this.bookings = apiBookings;
+    if (apiRooms)    this.rooms    = apiRooms;
+    if (apiBookings) this.bookings = apiBookings;
   },
 };
 
@@ -995,9 +1029,24 @@ App.UI = {
     const ROOMS=App.Data.Store.rooms, bookings=App.Data.Store.bookings;
     const occ=ROOMS.filter(r=>bookings.some(b=>b.roomId===r.id&&App.Service.Booking.occupiesOnDate(b,today))).length;
     document.getElementById('stat-occupied').textContent=occ;
-    document.getElementById('stat-vacant').textContent=App.Config.TOTAL_ROOMS-occ;
+    document.getElementById('stat-vacant').textContent=App.Data.Store.rooms.length-occ;
     document.getElementById('stat-repair').textContent=ROOMS.filter(r=>r.repair).length;
     document.getElementById('stat-dirty').textContent=ROOMS.filter(r=>!r.clean).length;
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Layer 4 — UI: Site switcher
+// ─────────────────────────────────────────────────────────────────────────────
+App.UI.Site = {
+  renderSwitcher() {
+    const el = document.getElementById('siteSwitcher');
+    if (!el) return;
+    const active = App.Site.get();
+    el.innerHTML = App.Config.SITES.map(s =>
+      `<button class="site-btn${s.id === active.id ? ' active' : ''}"
+        onclick="App.Site.set(${s.id})">${s.name}</button>`
+    ).join('');
   },
 };
 
@@ -1692,6 +1741,10 @@ App.bootstrap = async function() {
   setInterval(App.UI.Nav.updateClock.bind(App.UI.Nav), 1000);
   App.UI.Nav.updateClock();
   App.UI.Reports.initYears();
+  App.UI.Site.renderSwitcher();
+  // Update page subtitle to show active site
+  const _siteEl = document.querySelector('.overview-title');
+  if (_siteEl) _siteEl.textContent = App.Site.name() + ' — Room Allocation';
   // Auto-refresh every 3 min to pick up other users' changes
   setInterval(async()=>{
     try { await App.Data.Store.load(); App.UI.Calendar.render(); App.UI.updateStats(); App.UI.BookingForm.renderList(); }
